@@ -16,11 +16,18 @@ set -euo pipefail
 
 LOG="${1:-/dev/stdin}"
 TMP=$(mktemp -t parse-stages.XXXXXX)
-trap 'rm -f "$TMP"' EXIT
+RAW=$(mktemp -t parse-stages-raw.XXXXXX)
+trap 'rm -f "$TMP" "$RAW"' EXIT
+
+# vitest emits ANSI escape codes (color, bold, etc.) by default in CI when
+# stdout is a tty proxy; strip them before grepping so the unicode markers
+# remain matchable.
+# shellcheck disable=SC1117
+sed $'s/\x1b\\[[0-9;]*m//g' "$LOG" > "$RAW"
 
 # Extract one line per (RESULT, NN). U+2713 (✓) = pass, U+00D7 (×) = fail.
 # Skip-marker (↓) and todo (·) are not considered.
-grep -E '^[[:space:]]*(✓|×)[[:space:]].*>[[:space:]]*stage[0-9]{2}[[:space:]]*>' "$LOG" \
+grep -E '^[[:space:]]*(✓|×)[[:space:]].*>[[:space:]]*stage[0-9]{2}[[:space:]]*>' "$RAW" \
   | sed -E 's/^[[:space:]]*(✓|×)[[:space:]].*>[[:space:]]*stage([0-9]{2})[[:space:]]*>.*/\1 \2/' \
   | sed -E 's/^✓/PASS/; s/^×/FAIL/' \
   > "$TMP" || true
