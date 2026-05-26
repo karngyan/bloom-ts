@@ -1,0 +1,119 @@
+name: verify-stages
+
+# Runs the BYOX test suite on every push to main, hashes the canonical
+# files, mints a GitHub OIDC token bound to audience=karnstack, and
+# reports the result to karnstack.com so verified stages light up in
+# your karnstack dashboard.
+#
+# You should not edit this workflow or anything in .karnstack/ - those
+# files are part of the karnstack canonical template and their hashes
+# are checked server-side. Modifying them causes verification to be
+# rejected with `files_modified`.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # required to mint the OIDC token
+
+env:
+  PROJECT_SLUG: bloom-filter
+  LANGUAGE: typescript
+  KARNSTACK_URL: https://karnstack.com
+
+jobs:
+  verify:
+    # Skip the workflow on the karnstack canonical template itself.
+    # A template-marked repo cannot produce a valid `template_repository`
+    # claim, so karnstack's verify endpoint would reject it anyway with
+    # `not_from_template`. Skipping here saves the action minutes and
+    # keeps the template's CI history clean.
+    if: ${{ !github.event.repository.is_template }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install mise toolchain
+        uses: jdx/mise-action@v4
+
+      - name: Install project dependencies
+        run: mise run setup
+
+      - name: Run all stages
+        id: tests
+        continue-on-error: true
+        run: mise run all 2>&1 | tee test-output.txt
+
+      - name: Compute canonical file hashes
+        run: bash .karnstack/compute-hashes.sh > hashes.json
+
+      - name: Parse passing stages from test output
+        run: bash .karnstack/parse-stages.sh test-output.txt > stages.json
+
+      - name: Capture template metadata
+        id: tmpl
+        # Workflow-attested template lineage. karnstack's verify endpoint
+        # prefers this over hitting the unauthenticated GitHub API, which
+        # is required for private forks (the API call 404s on those).
+        #
+        # The push event payload does NOT include
+        # repository.template_repository (it's a stripped-down version of
+        # the repo object), so we ask the REST API directly with the
+        # auto-issued GITHUB_TOKEN. This call is authenticated and works
+        # on private forks.
+        #
+        # Trust is gated server-side by the hash check above: editing this
+        # workflow to lie about template_repo busts the canonical hash and
+        # the verification is rejected with `files_modified`.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TMPL=$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.template_repository.full_name // ""')
+          echo "full_name=${TMPL}" >> "$GITHUB_OUTPUT"
+
+      - name: Mint OIDC token and post to karnstack
+        env:
+          TEMPLATE_REPO: ${{ steps.tmpl.outputs.full_name }}
+        run: |
+          set -euo pipefail
+
+          OIDC_TOKEN=$(curl -sLS \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=karnstack" \
+            | jq -r '.value')
+
+          PAYLOAD=$(jq -n \
+            --arg t "$OIDC_TOKEN" \
+            --arg p "$PROJECT_SLUG" \
+            --arg l "$LANGUAGE" \
+            --arg tr "$TEMPLATE_REPO" \
+            --slurpfile s stages.json \
+            --slurpfile h hashes.json \
+            '{ oidc_token: $t, project: $p, language: $l, template_repo: $tr, stages: $s[0], hashes: $h[0] }')
+
+          RESPONSE=$(curl -sS -X POST "${KARNSTACK_URL}/api/v1/byox/verify" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          echo "karnstack response:"
+          echo "$RESPONSE" | jq .
+
+          OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+          if [ "$OK" != "true" ]; then
+            REASON=$(echo "$RESPONSE" | jq -r '.reason // "unknown"')
+            if [ "$REASON" = "files_modified" ]; then
+              echo "::error title=karnstack verify::your starter is out of sync with karnstack. run 'mise run sync' (or bash .karnstack/sync.sh) to pull the latest canonical files, then commit and push."
+              echo "::error::if .karnstack/sync.sh does not yet exist in your fork, bootstrap it first:"
+              echo "::error::  curl -fsSL https://raw.githubusercontent.com/karnstack/byox-bloom-filter-ts/main/.karnstack/sync.sh -o .karnstack/sync.sh && chmod +x .karnstack/sync.sh && bash .karnstack/sync.sh"
+            else
+              echo "::warning title=karnstack verify::verification not accepted: ${REASON}"
+            fi
+          else
+            STAGES=$(echo "$RESPONSE" | jq -r '.verified_stages | join(", ")')
+            echo "::notice title=karnstack verify::verified stages: ${STAGES}"
+          fi

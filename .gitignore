@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.vitest/
+coverage/
+
+.vscode/
+.idea/
+*.swp
+.DS_Store

@@ -1,0 +1,40 @@
+# mise pins the toolchain and exposes karnstack BYOX tasks.
+# Install mise first: https://mise.jdx.dev/getting-started.html
+#
+# Then from this directory:
+#   mise trust            # one-time, allow this config to run
+#   mise install          # installs Node 24 + pnpm
+#   mise run setup        # installs npm dependencies
+#   mise run stage 1      # runs the tests for stage 1
+#   mise run all          # runs every stage's tests
+#
+# Stage prefix in vitest test names:
+#   stage 1 -> "stage01 > ..."
+#   stage 2 -> "stage02 > ..."
+#   ...
+
+[tools]
+node = "24"
+pnpm = "latest"
+
+[tasks.setup]
+description = "Install dependencies."
+run = "pnpm install"
+
+[tasks.stage]
+description = "Run tests for one stage. Usage: mise run stage <n>"
+usage = '''
+arg "n" help="Stage number, 1 through 6."
+'''
+run = '''
+stage=$(printf 'stage%02d' "$usage_n")
+pnpm vitest run --reporter=verbose -t "^$stage"
+'''
+
+[tasks.all]
+description = "Run tests for every stage."
+run = "pnpm vitest run --reporter=verbose"
+
+[tasks.sync]
+description = "Pull canonical files from the karnstack template."
+run = "bash .karnstack/sync.sh"

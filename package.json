@@ -1,0 +1,20 @@
+{
+  "name": "byox-bloom-filter-ts",
+  "version": "0.0.1",
+  "description": "Karnstack BYOX starter: Bloom filter, TypeScript variant.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
