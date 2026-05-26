@@ -15,7 +15,7 @@
 
 [tools]
 node = "24"
-pnpm = "latest"
+pnpm = "10"
 
 [tasks.setup]
 description = "Install dependencies."
